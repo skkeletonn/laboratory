@@ -1,8 +1,7 @@
 --[[
 
 ArrayField Interface Suite
-by vqmpjay
-
+by skeleton
 Original by Sirius
 
 -------------------------------
