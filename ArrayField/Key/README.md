@@ -21,7 +21,7 @@ A fully animated, feature-rich key system for Roblox scripts with multiple valid
 ## Installation
 
 ```lua
-local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/vqmpjayZ/laboratory/refs/heads/main/ArrayField/Key/KeySystemV3.lua"))()
+local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/skkeletonn/laboratory/refs/heads/main/ArrayField/Key/KeySystemV3.lua"))()
 ```
 
 ## Quick Start
