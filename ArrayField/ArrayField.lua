@@ -4089,7 +4089,7 @@ function ArrayFieldLibrary:CreateWindow(Settings)
     LoadingFrame.Version.TextTransparency = 1
     LoadingFrame.Version.Position = UDim2.new(0, 100, 0, 230)
     LoadingFrame.Title.Text = Settings.LoadingTitle or "ArrayField Interface Suite"
-    LoadingFrame.Subtitle.Text = Settings.LoadingSubtitle or "by vqmpjay"
+    LoadingFrame.Subtitle.Text = Settings.LoadingSubtitle or "by skeleton"
     if Settings.LoadingTitle ~= "Arrayfield Interface Suite" then
         LoadingFrame.Version.Text = "ArrayField UI"
     end
