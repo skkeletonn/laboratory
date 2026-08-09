@@ -1,4 +1,4 @@
-local Notify --[[or call it whatever]] = loadstring(game:HttpGet("https://raw.githubusercontent.com/vqmpjayZ/laboratory/refs/heads/main/ArrayField/Notify/NotificationModule.lua"))()
+local Notify --[[or call it whatever]] = loadstring(game:HttpGet("https://raw.githubusercontent.com/skkeletonn/laboratory/refs/heads/main/ArrayField/Notify/NotificationModule.lua"))()
 
 Notify:Notify({
     Title = "Hello",
