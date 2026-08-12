@@ -7,7 +7,7 @@ KeySystem:CreateKeyUI({
     SaveKey = false, -- decides if the key system will appear on any execution of the script or once every savekeyduration if you've put sumn
     SaveKeyDuration = 25, -- how long before the savekey stops working. You can just remove this line if you want it saved forever or until the key changes.
     FileName = "My_SriptHub1",
-    Trial = {
+    Trial = { ----------------------------------------------   you can remove these things like Trial, DiscordValidation, ValidateKeyFromServer n VIP if youre just not using them at all.  ---------------------------------------------- 
         Enabled = false, --enabling this makes 
         Duration = "15m", -- you can put m for minutes, h for hours n d for days ,, also like 3d15h or just 25h. if u js enter a number n no suffix its finna do hours
     },
