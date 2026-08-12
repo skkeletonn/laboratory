@@ -1,385 +1,262 @@
 # ArrayField Key System V3
 
-Readme written by chatgpt u rly think vqmpjay would write this 🤮🤮🤮🤮
-A fully animated, feature-rich key system for Roblox scripts with multiple validation modes, built-in security, HWID support, and key persistence.
-
-![ArrayField Key System](https://img.shields.io/badge/Version-3.0-purple?style=for-the-badge)
-![Roblox](https://img.shields.io/badge/Platform-Roblox-blue?style=for-the-badge)
-![Lua](https://img.shields.io/badge/Language-Lua-yellow?style=for-the-badge)
-
-## Features
-
-- **Three Validation Modes** — Static keys, server-validated keys, and Discord-linked keys
-- **Animated UI** — Smooth tweened animations for open, close, and error states
-- **Built-in Security** — Multiple layers of protection against common exploits and key theft
-- **HWID Generation** — Salted hardware ID generation unique to each user
-- **VIP Bypass** — Whitelist specific HWIDs to skip the key system entirely
-- **Key Persistence** — Save validated keys locally with configurable expiration
-- **Mobile Support** — Touch-friendly with mobile-specific interaction handling
-- **Error Feedback** — Shake animation on incorrect key entry
-
-## Installation
+A Roblox key UI with three validation modes, optional free trial, HWID lock, VIP bypass, and saved keys.
 
 ```lua
 local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/skkeletonn/laboratory/refs/heads/main/ArrayField/Key/KeySystemV3.lua"))()
 ```
 
-## Quick Start
+---
 
-### Static Keys
+## What it does
 
-The simplest setup. Define your keys directly in the script.
+| Mode | How the key is checked |
+|---|---|
+| **Static** | `Keys = {"abc"}` in the script |
+| **Server** | `GET your-url?key=...` → body is `true` / `false` |
+| **Discord** | `POST` `{key, hwid, secret}` to your API (HWID lock + membership) |
+
+Plus:
+
+- **Trial** — skip the key window for `15m` / `12h` / `4d` / etc. on first run (per device)
+- **VIP** — listed HWIDs never see the UI
+- **SaveKey** — remember a valid key locally (`SaveKeyDuration` hours, `0` = until you wipe it)
+- Animated UI, shake on bad key, mobile tap-to-copy
+
+---
+
+## Quick starts
+
+### Static key
 
 ```lua
 KeySystem:CreateKeyUI({
     Title = "My Script",
-    Subtitle = "Enter Key",
-    Note = "Join the Discord to get the key!",
-    Keys = {"my-secret-key-123", "another-valid-key"},
+    Note = "Join the Discord for the key.",
+    Keys = {"my-secret-key-123"},
     SaveKey = true,
     FileName = "MyScript",
     Callback = function()
-        print("Key accepted! Loading script...")
+        -- load your script here
     end
 })
 ```
 
-### Server Validation
+### Free trial + static key
 
-Validate keys against a remote server. Works with key link services like work.ink, Linkvertise, or your own custom endpoint.
-
-Your endpoint should return `true` or `false` as plain text when it receives a `?key=` query parameter.
+First execute on a device skips the UI for 15 minutes. After that, they need a key.
 
 ```lua
 KeySystem:CreateKeyUI({
     Title = "My Script",
-    Subtitle = "Enter Key",
-    Note = "Click below to get your key.",
+    Note = "Trial is 15 minutes. Then you need a key.",
+    Keys = {"my-secret-key-123"},
+    Trial = {
+        Enabled = true,
+        Duration = "15m", -- 15m / 12h / 4d / 35h / 1d12h / "90" (= 90 hours)
+    },
+    FileName = "MyScript",
+    Callback = function()
+        -- load your script here
+    end
+})
+```
+
+### Server / work.ink style
+
+Your endpoint: `GET .../validate?key=THE_KEY` → respond with the text `true` or `false`.
+
+```lua
+KeySystem:CreateKeyUI({
+    Title = "My Script",
+    Note = "Click below to get a key.",
     ValidateKeyFromServer = {
         Enabled = true,
         ValidateURL = "https://your-server.com/validate"
     },
     Action = {
-        Link = "https://your-key-link.com"
+        Link = "https://work.ink/your-link" -- copied when they click the button
     },
     SaveKey = true,
     SaveKeyDuration = 24,
     FileName = "MyScript",
-    Callback = function()
-        print("Key accepted! Loading script...")
-    end
+    Callback = function() end
 })
 ```
 
-### Discord Validation
+### Discord (Vadrifts /ks)
 
-The most secure mode. Keys are generated per-user via a Discord bot command, locked to their HWID, and validated in real-time against Discord server membership. If a user leaves the server, their key dies instantly.
+Add the Vadrifts bot to **your** server (that's where `/ks setup` and `/ks getkey` live):
 
-This prevents key sharing on any platform — whether someone posts it in a description, a comment, a forum, a group chat, or anywhere else. The key simply won't work for anyone other than the person it was generated for, on the device it was first used on.
+1. Join **[discord.gg/TtfXNuwMnW](https://discord.gg/TtfXNuwMnW)**
+2. Open the bot's profile (**25ms** — ID `1389214056325582898`)
+3. **Add App** → pick your server → allow it to create slash commands
 
-This mode requires your own backend API and Discord bot. See the [Discord Validation Setup](#discord-validation-setup) section below.
+Then in *your* server: `/ks setup` (admin) to create the script profile, copy the API secret, paste it below. Users run `/ks getkey`.
+
+Keys are locked to HWID on first use. Leave the server → key dies.
 
 ```lua
 KeySystem:CreateKeyUI({
-    Title = "My Script",
-    Subtitle = "Enter Key",
-    Note = "Run /getkey in the Discord server to get your key.",
+    Title = "Vadrifts Key System",
+    Subtitle = "This script is protected with a key system.",
+    Note = "Run /ks getkey in Discord. Must stay in the server.",
     DiscordValidation = {
         Enabled = true,
-        ValidateURL = "https://your-server.com/api/validate-discord-key",
-        APISecret = "your-api-secret"
+        ValidateURL = "https://vadrifts.onrender.com/api/validate-guild-key",
+        APISecret = "paste-the-secret-from-/ks-setup"
+    },
+    Trial = {
+        Enabled = true,
+        Duration = "15m",
     },
     SaveKey = true,
     SaveKeyDuration = 24,
-    FileName = "MyScript",
-    Callback = function()
-        print("Key accepted! Loading script...")
-    end
+    FileName = "Vadrifts-STK",
+    Action = {
+        Link = "https://discord.gg/your-invite",
+    },
+    Callback = function() end
 })
 ```
 
-## Full Configuration Reference
+`APISecret` is the spoiler from **`/ks setup`** for **that** script. Wrong secret = every key fails.
+
+---
+
+## Config reference
 
 ```lua
 KeySystem:CreateKeyUI({
-    -- REQUIRED
+    -- required
     Callback = function() end,
 
-    -- UI TEXT
+    -- UI
     Title = "Key System",
     Subtitle = "Enter Key",
-    Note = "Instructions for the user",
+    Note = "What the user should do",
 
-    -- MODE 1: STATIC KEYS
-    Keys = {"key1", "key2", "key3"},
+    -- mode 1
+    Keys = {"key1", "key2"},
 
-    -- MODE 2: SERVER VALIDATION
+    -- mode 2
     ValidateKeyFromServer = {
         Enabled = true,
         ValidateURL = "https://your-server.com/validate"
     },
 
-    -- MODE 3: DISCORD VALIDATION
+    -- mode 3
     DiscordValidation = {
         Enabled = true,
-        ValidateURL = "https://your-server.com/api/validate-discord-key",
-        APISecret = "your-api-secret"
+        ValidateURL = "https://vadrifts.onrender.com/api/validate-guild-key",
+        APISecret = "from-/ks-setup"
     },
 
-    -- KEY PERSISTENCE
+    -- skip the UI on first run for this long (per HWID)
+    Trial = {
+        Enabled = true,
+        Duration = "15m",
+    },
+
+    -- remember a good key
     SaveKey = true,
-    SaveKeyDuration = 24,
+    SaveKeyDuration = 24, -- hours; 0 = no local expiry
     FileName = "UniqueNamePerScript",
 
-    -- COPY KEY LINK BUTTON
-    Action = {
-        Link = "https://your-key-link.com"
-    },
+    -- "copy link" button
+    Action = { Link = "https://..." },
 
-    -- VIP BYPASS
+    -- skip UI forever for these HWIDs
     VIP = {
         Enabled = true,
-        PastebinURL = "https://pastebin.com/raw/your-vip-list",
-        LocalList = {"hwid1", "hwid2"}
+        PastebinURL = "https://pastebin.com/raw/...",
+        LocalList = {"hwid1"}
     },
 
-    -- HWID
-    HWIDSalt = "your-unique-salt"
+    HWIDSalt = "unique-per-script",
 })
 ```
 
-## Configuration Details
+### Trial
 
-### Callback (required)
+| Field | Meaning |
+|---|---|
+| `Enabled` | `true` to turn it on |
+| `Duration` | `15m`, `12h`, `4d`, `35h`, `1d12h`, or `"90"` (hours) |
 
-The function that runs when a valid key is entered. This is where you load your script.
-
-### Title / Subtitle / Note
-
-Customize the text displayed on the key system UI.
-
-### Keys
-
-An array of valid key strings for static key mode. Not needed if using server or Discord validation.
-
-### ValidateKeyFromServer
-
-Enable to validate keys against a remote endpoint. Your server receives the key as a query parameter and should return `true` or `false` as plain text.
-
-```
-GET https://your-server.com/validate?key=user-entered-key
-Response: true
-```
+- Checked **after VIP**, **before** the key window.
+- Clock starts on first execute for that HWID. Reloading mid-trial does not reset it.
+- Stored next to the saved key as `FileName_trial.rfld`. Deleting the script does nothing. Deleting that file does (client-side limit).
+- When it expires they see the normal key UI on the **next** execute. No mid-session kick.
 
 ### DiscordValidation
 
-Enable to validate keys against a Discord-linked backend. Keys are generated per-user, HWID-locked, and require active Discord server membership. Your endpoint receives a JSON POST:
+`POST` JSON:
 
 ```json
-{
-    "key": "the-entered-key",
-    "hwid": "users-hardware-id",
-    "secret": "your-api-secret"
-}
+{ "key": "...", "hwid": "...", "secret": "..." }
 ```
 
-And should return:
+Expect:
 
 ```json
-{
-    "valid": true,
-    "message": "Authenticated"
-}
+{ "valid": true, "message": "Authenticated" }
 ```
 
-### SaveKey
+or `{ "valid": false, "message": "why it failed" }`.
 
-When enabled, valid keys are saved locally so users don't have to re-enter them every time they run the script.
+Users: `/ks getkey` · `/ks resetkey` if the device changes. Admins: `/ks setup`.
 
-### SaveKeyDuration
+### Everything else
 
-How many hours a saved key remains valid. Set to `0` or omit for keys that never expire locally. When using Discord validation, saved keys are re-validated against the server on each load.
+- **SaveKey** — write the key to `ArrayField/Key System/FileName.rfld`. Discord mode re-checks it with the API every launch (so a leaver still dies).
+- **FileName** — unique per script or saved keys/trials collide.
+- **HWIDSalt** — unique per script or HWIDs match across your scripts.
+- **Action** — optional clipboard button. Omit the table to hide it.
+- **VIP** — remote list = JSON array **or** one HWID per line.
 
-### FileName
+---
 
-A unique name for the saved key file. Use different names for different scripts to prevent key collisions.
-
-### Action
-
-Adds a clickable button to the UI that copies a link to the user's clipboard. Useful for directing users to key link pages.
-
-### VIP
-
-Allows specific HWIDs to bypass the key system entirely. Supports both a remote list (fetched from a URL) and a local list defined in the script. The remote list can be JSON array format or one HWID per line.
-
-### HWIDSalt
-
-A string used to salt the HWID generation. Different salts produce different HWIDs from the same machine. Use a unique salt per script to prevent HWID cross-referencing between different scripts.
-
-## Discord Validation Setup
-
-This section is for advanced users who want to set up the Discord validation mode with their own infrastructure.
-
-### What You Need
-
-- A Discord bot with Server Members Intent enabled
-- A web server with an API endpoint
-- A database or file storage for keys
-
-### How It Works
+## Check order
 
 ```
-1. User joins your Discord server
-2. User requests a key through your bot
-3. Bot generates a unique key tied to their Discord account
-4. User enters the key in your Roblox script
-5. Script sends the key + HWID to your API
-6. API checks:
-   - Is this key valid and not expired?
-   - Is the Discord user still in the server?
-   - Does the HWID match (or is this first use)?
-7. All checks pass → authenticated
-8. User leaves Discord → key is automatically revoked
+1. VIP HWID          → skip everything
+2. Trial             → skip UI until Duration is up
+3. Saved key         → Discord mode still hits the API
+4. User types a key
+      DiscordValidation  (if enabled)
+      else ValidateKeyFromServer
+      else Keys
 ```
 
-### Security Properties
+---
 
-| Scenario | Result |
+## Discord mode (your own backend)
+
+You need a bot, an API, and a DB. **Vadrifts already is that** — join [discord.gg/TtfXNuwMnW](https://discord.gg/TtfXNuwMnW), add **25ms** (`1389214056325582898`) from its profile to your server, then `/ks setup`. Endpoint: `/api/validate-guild-key`.
+
+If you roll your own:
+
+```
+user in Discord → /ks getkey → unique key tied to their account
+script POSTs key + HWID + secret
+API checks: key exists, not expired, still in server, HWID matches (or first use)
+leave Discord → key revoked
+```
+
+| Situation | Result |
 |---|---|
-| Key shared on any platform | HWID mismatch — rejected |
-| User not in Discord server | Membership check fails — rejected |
-| User joins, gets key, leaves | Key auto-revoked on server leave |
-| User rejoins after leaving | Must request a new key |
-| Key expires | User must request a new key |
-| HWID changes | User resets their key through the bot |
+| Key posted anywhere | HWID mismatch |
+| Not in the server | Rejected |
+| Leaves after getting a key | Auto-revoked |
+| Comes back | `/ks getkey` again |
+| New device | `/ks resetkey` then `/ks getkey` |
 
-### API Endpoint Specification
+---
 
-**POST** `/api/validate-discord-key`
+## Don't
 
-Request body:
-
-```json
-{
-    "key": "string",
-    "hwid": "string",
-    "secret": "string"
-}
-```
-
-Success response:
-
-```json
-{
-    "valid": true,
-    "message": "Authenticated"
-}
-```
-
-Failure responses:
-
-```json
-{"valid": false, "message": "Invalid key"}
-{"valid": false, "message": "Key expired. Run /getkey in Discord."}
-{"valid": false, "message": "You must be in the Discord server."}
-{"valid": false, "message": "Key is locked to a different device. Use /resetkey in Discord."}
-{"valid": false, "message": "Unauthorized"}
-{"valid": false, "message": "Missing key or HWID"}
-```
-
-## Validation Priority
-
-When multiple validation modes are configured, the key system follows this priority:
-
-```
-1. VIP check → if HWID is whitelisted, skip everything
-2. Saved key check → if a valid saved key exists, use it
-   (Discord mode re-validates saved keys against the server)
-3. User enters key → validate using the active mode:
-   Discord Validation (highest priority)
-   → Server Validation
-   → Static Keys (lowest priority)
-```
-
-## Examples
-
-### Minimal Setup (Static Key)
-
-```lua
-local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/vqmpjayZ/laboratory/refs/heads/main/ArrayField/Key/KeySystemV3.lua"))()
-
-KeySystem:CreateKeyUI({
-    Title = "Cool Script",
-    Note = "Key: free-key-123",
-    Keys = {"free-key-123"},
-    Callback = function()
-        loadstring(game:HttpGet("your-script-url"))()
-    end
-})
-```
-
-### Full Setup (Server Validation + VIP + Saved Keys)
-
-```lua
-local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/vqmpjayZ/laboratory/refs/heads/main/ArrayField/Key/KeySystemV3.lua"))()
-
-KeySystem:CreateKeyUI({
-    Title = "Premium Script",
-    Subtitle = "Authentication Required",
-    Note = "Complete the link below to get your key. Key lasts 24 hours.",
-    ValidateKeyFromServer = {
-        Enabled = true,
-        ValidateURL = "https://your-server.com/validate"
-    },
-    Action = {
-        Link = "https://work.ink/your-link"
-    },
-    SaveKey = true,
-    SaveKeyDuration = 24,
-    FileName = "PremiumScript",
-    HWIDSalt = "premium-salt-2025",
-    VIP = {
-        Enabled = true,
-        PastebinURL = "https://pastebin.com/raw/your-list"
-    },
-    Callback = function()
-        loadstring(game:HttpGet("your-script-url"))()
-    end
-})
-```
-
-### Discord-Secured Setup
-
-```lua
-local KeySystem = loadstring(game:HttpGet("https://raw.githubusercontent.com/vqmpjayZ/laboratory/refs/heads/main/ArrayField/Key/KeySystemV3.lua"))()
-
-KeySystem:CreateKeyUI({
-    Title = "Exclusive Script",
-    Subtitle = "Discord Members Only",
-    Note = "Run /getkey in our Discord server to get your key.",
-    DiscordValidation = {
-        Enabled = true,
-        ValidateURL = "https://your-server.com/api/validate-discord-key",
-        APISecret = "your-secret-here"
-    },
-    SaveKey = true,
-    SaveKeyDuration = 24,
-    FileName = "ExclusiveScript",
-    HWIDSalt = "exclusive-salt-2025",
-    VIP = {
-        Enabled = true,
-        LocalList = {"owner-hwid-here"}
-    },
-    Callback = function()
-        loadstring(game:HttpGet("your-script-url"))()
-    end
-})
-```
-
-## Notes
-
-- Each script should use a unique `FileName` to prevent saved key conflicts
-- Each script should use a unique `HWIDSalt` to prevent HWID cross-referencing
-- The `Action` button is optional and only appears when configured
-- Discord validation mode will re-validate saved keys on every script launch to ensure the user is still in the server
-- VIP bypass is checked before anything else, including saved keys
+- Reuse `FileName` or `HWIDSalt` across scripts
+- Put the API secret in a public repo / screenshot
+- Expect Trial to survive someone deleting `ArrayField/Key System/` — that's client-side
+- Mix DiscordValidation **and** ValidateKeyFromServer and expect both to run. Discord wins.
