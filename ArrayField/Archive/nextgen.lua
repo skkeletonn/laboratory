@@ -1258,6 +1258,21 @@ local Layout = {
     -- only 14, so the sidebar ran too close to the bottom and looked tall.
     -- Raise this to make the sidebar shorter.
     SidebarBottomGap = 38,
+
+    -- Settings panel. Height is computed from the rows actually present
+    -- (it used to be hardcoded at 303, which left dead space once extra
+    -- rows were added).
+    SettingsWidth      = 210,
+    SettingsRowGap     = 6,
+    SettingsPadTop     = 34,
+    SettingsPadBottom  = 12,
+    SettingsDropdownOpenExtra = 140,
+
+    -- Topbar buttons sit at fixed offsets, so they crowded the title on
+    -- narrow windows. Below TopbarCompactAt the optional ones are hidden.
+    TopbarCompactAt   = 430,
+    TopbarButtonWidth = 30,
+    TopbarTitleInset  = 40,
     OGScale        = 0.955, -- Elements width in OG mode (small side margins)
     SidebarHideAt  = 560,   -- auto-drop the sidebar below this width
 
@@ -1985,6 +2000,55 @@ local function FadeOut(parent, duration, excludeNames)
     end
 end
 
+--[[ Add an instance (and its descendants) to an existing fade cache.
+
+     StoreOriginalTransparencies() snapshots a container once, early in
+     startup. Anything created afterwards - like the generated settings rows -
+     is missing from that snapshot, so FadeIn() skips it and it never becomes
+     visible, while still occupying height. This backfills the cache. ]]
+local function RegisterFadeTarget(container, instance, reference)
+    local stored = OriginalTransparencies[container]
+    if not stored or not instance then return end
+
+    -- Values are read from an equivalent instance that already has correct
+    -- transparencies (the row this one was cloned from). Reading the clone
+    -- itself is useless: it is created while the panel is hidden, so every
+    -- transparency is 1 and FadeIn would "restore" it to invisible.
+    local function targetFor(obj, ref)
+        local data = {}
+        local src = ref or obj
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+            data.TextTransparency = ref and src.TextTransparency or 0
+            data.BackgroundTransparency = ref and src.BackgroundTransparency or obj.BackgroundTransparency
+        elseif obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+            data.ImageTransparency = ref and src.ImageTransparency or 0
+            data.BackgroundTransparency = ref and src.BackgroundTransparency or obj.BackgroundTransparency
+        elseif obj:IsA("Frame") or obj:IsA("ScrollingFrame") then
+            data.BackgroundTransparency = ref and src.BackgroundTransparency or obj.BackgroundTransparency
+        elseif obj:IsA("UIStroke") then
+            data.Transparency = ref and src.Transparency or 0
+        end
+        return data
+    end
+
+    -- Prefer the cached values of the reference row, which FadeIn already
+    -- knows how to show correctly.
+    local refStored = reference and stored[reference] or nil
+    local rootData = refStored and table.clone(refStored) or targetFor(instance, reference)
+    if next(rootData) then
+        stored[instance] = rootData
+    end
+
+    for _, obj in ipairs(instance:GetDescendants()) do
+        local refChild = reference and reference:FindFirstChild(obj.Name, true) or nil
+        local cached = refChild and stored[refChild] or nil
+        local data = cached and table.clone(cached) or targetFor(obj, refChild)
+        if next(data) then
+            stored[obj] = data
+        end
+    end
+end
+
 local function FadeIn(parent, duration, excludeNames)
     local stored = OriginalTransparencies[parent]
     if not stored then
@@ -2027,8 +2091,92 @@ local function SetAllTransparent(parent)
     end
 end
 
--- Populated once MakeSettingsToggle exists (defined further down).
+local function StartMarquee(textLabel)
+	task.spawn(function()
+		local parent = textLabel.Parent
+		if not parent then return end
+		parent.ClipsDescendants = true
+
+		task.wait(3)
+
+		local origPos = textLabel.Position
+
+		local isInCategory = parent.Parent and parent.Parent:IsA("Frame") and parent.Parent.Name == "Holder"
+
+		local function GetVisibleRight()
+			local right = parent.AbsolutePosition.X + parent.AbsoluteSize.X
+			local current = parent.Parent
+			while current and current:IsA("GuiObject") do
+				if current.ClipsDescendants then
+					local parentRight = current.AbsolutePosition.X + current.AbsoluteSize.X
+					if parentRight < right then
+						right = parentRight
+					end
+				end
+				current = current.Parent
+			end
+			return right
+		end
+
+		while textLabel and textLabel.Parent do
+			if Minimised or textLabel.TextTransparency >= 0.9 then
+				task.wait(1)
+				continue
+			end
+
+			textLabel.Position = origPos
+
+			task.wait()
+
+			local textWidth = textLabel.TextBounds.X
+			local visibleRight = GetVisibleRight()
+			local textLeft = textLabel.AbsolutePosition.X
+			local visibleWidth = visibleRight - textLeft
+
+			local threshold = isInCategory and 3 or 2
+			if textWidth <= visibleWidth + threshold or visibleWidth <= 1 then
+				task.wait(2)
+				continue
+			end
+
+			local overflow = textWidth - visibleWidth + 5
+
+			task.wait(2)
+			if not (textLabel and textLabel.Parent) then break end
+			if Minimised or textLabel.TextTransparency >= 0.9 then
+				textLabel.Position = origPos
+				continue
+			end
+
+			local dur = math.clamp(overflow / 35, 0.5, 8)
+			local scrollTween = TweenService:Create(textLabel, TweenInfo.new(dur, Enum.EasingStyle.Linear), {
+				Position = UDim2.new(origPos.X.Scale, origPos.X.Offset - overflow, origPos.Y.Scale, origPos.Y.Offset)
+			})
+			scrollTween:Play()
+			scrollTween.Completed:Wait()
+
+			task.wait(1)
+			if not (textLabel and textLabel.Parent) then break end
+
+			local curTrans = textLabel.TextTransparency
+			TweenService:Create(textLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
+			task.wait(0.35)
+
+			if not (textLabel and textLabel.Parent) then break end
+
+			textLabel.Position = origPos
+
+			TweenService:Create(textLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = curTrans}):Play()
+			task.wait(0.35)
+
+			task.wait(1.5)
+		end
+	end)
+end
+
+-- Populated once the settings builders exist (defined further down).
 local SettingsTogglesRef = function() return {} end
+local SettingsButtonsRef = function() return {} end
 
 local function ApplyTheme()
     if not SelectedTheme then return end
@@ -2305,6 +2453,9 @@ local function ApplyTheme()
     for _, entry in pairs(SettingsTogglesRef()) do
         if entry.Paint then entry.Paint() end
         if entry.Refresh then entry.Refresh() end
+    end
+    for _, entry in pairs(SettingsButtonsRef()) do
+        if entry.Paint then entry.Paint() end
     end
 
     local grip = Main:FindFirstChild("ResizeGrip")
@@ -2794,6 +2945,85 @@ local function MakeElementInternalsResponsive(element)
     end
 end
 
+--[[ Hover-to-reveal for element titles.
+
+     Rather than permanently wrapping long names (the Rayfield behaviour you
+     didn't like), titles truncate with "..." and only expand while hovered:
+     the element grows, the full name wraps onto as many lines as it needs,
+     and the description appears underneath.
+
+     Elements with no description show a neutral placeholder so the panel
+     doesn't look broken. ]]
+local HOVER_NO_DESC = "No description added"
+
+local function SetupHoverExpand(element)
+    if not element or element:GetAttribute("HoverExpand") then return end
+
+    local title = element:FindFirstChild("Title")
+    if not title or not title:IsA("TextLabel") then return end
+    element:SetAttribute("HoverExpand", true)
+
+    local desc = element:FindFirstChild("Description")
+    local baseHeight = element.Size.Y.Offset
+    if baseHeight <= 0 then baseHeight = 40 end
+
+    local hovering = false
+
+    local function titleOverflows()
+        -- TextBounds is the unconstrained width of the string
+        return title.TextBounds.X > title.AbsoluteSize.X + 1
+    end
+
+    local function expand()
+        hovering = true
+        if not (titleOverflows() or desc) then return end
+
+        title.TextWrapped = true
+        title.TextTruncate = Enum.TextTruncate.None
+
+        -- how tall the wrapped title needs to be
+        local lines = 1
+        if title.AbsoluteSize.X > 0 then
+            lines = math.ceil(title.TextBounds.X / math.max(title.AbsoluteSize.X, 1))
+        end
+        lines = math.clamp(lines, 1, 4)
+
+        local extra = (lines - 1) * 16
+        local descText = desc and desc.Text or ""
+        if descText == "" then descText = HOVER_NO_DESC end
+
+        if desc then
+            desc.Text = descText
+            desc.Visible = true
+            extra = extra + 18
+        end
+
+        TweenService:Create(element, TweenInfo.new(0.25, Enum.EasingStyle.Quint),
+            {Size = UDim2.new(element.Size.X.Scale, element.Size.X.Offset, 0, baseHeight + extra)}):Play()
+    end
+
+    local function collapse()
+        hovering = false
+        title.TextWrapped = false
+        title.TextTruncate = Enum.TextTruncate.AtEnd
+        TweenService:Create(element, TweenInfo.new(0.25, Enum.EasingStyle.Quint),
+            {Size = UDim2.new(element.Size.X.Scale, element.Size.X.Offset, 0, baseHeight)}):Play()
+    end
+
+    element.MouseEnter:Connect(expand)
+    element.MouseLeave:Connect(collapse)
+
+    -- Touch devices have no hover, so a tap toggles it
+    local interact = element:FindFirstChild("Interact")
+    if interact and UserInputService.TouchEnabled then
+        interact.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                if hovering then collapse() else expand() end
+            end
+        end)
+    end
+end
+
 local function MakeTemplatesResponsive()
     local T = Elements:FindFirstChild("Template")
     if not T or T:GetAttribute("Responsive") then return end
@@ -2818,6 +3048,7 @@ local function MakeTemplatesResponsive()
             cap.MaxSize = Vector2.new(Layout.ElementMaxWidth, math.huge)
 
             MakeElementInternalsResponsive(child)
+            SetupHoverExpand(child)
         end
     end
 end
@@ -2836,6 +3067,43 @@ local function EffectiveMaxWidth()
         cap = math.floor(Layout.MaxContentWidth / Layout.OGScale)
     end
     return math.clamp(cap, Layout.MinWidth, Layout.MaxWidth)
+end
+
+--[[ Keep the topbar buttons from crowding the title.
+
+     The buttons sit at fixed offsets from the right edge, so on a narrow
+     window they ran into the title text. Below a threshold the optional
+     buttons (search / settings) are dropped, keeping the essential ones,
+     and the title is shortened to whatever space is left. ]]
+local function ReflowTopbar(width)
+    if not Topbar then return end
+
+    local essential = { Hide = true, ChangeSize = true }
+    local optional  = { "Search", "Settings" }
+
+    local hideOptional = width < Layout.TopbarCompactAt
+    local visibleCount = 0
+
+    for _, name in ipairs(optional) do
+        local btn = Topbar:FindFirstChild(name)
+        if btn and btn:IsA("ImageButton") then
+            btn.Visible = not hideOptional
+            if not hideOptional then visibleCount = visibleCount + 1 end
+        end
+    end
+    for name in pairs(essential) do
+        if Topbar:FindFirstChild(name) then visibleCount = visibleCount + 1 end
+    end
+
+    -- Reserve room for the buttons plus the leading icon, then give the
+    -- rest to the title so the two can never overlap.
+    local reserved = visibleCount * Layout.TopbarButtonWidth + Layout.TopbarTitleInset
+    local title = Topbar:FindFirstChild("Title")
+    if title and title:IsA("TextLabel") then
+        title.Size = UDim2.new(1, -(reserved + Layout.TopbarTitleInset),
+                               title.Size.Y.Scale, title.Size.Y.Offset)
+        title.TextTruncate = Enum.TextTruncate.AtEnd
+    end
 end
 
 function ApplyWindowSize(width, height, animated, skipSave)
@@ -2859,6 +3127,7 @@ function ApplyWindowSize(width, height, animated, skipSave)
     end
 
     ReflowElements(animated)
+    ReflowTopbar(width)
 
     -- Keep the drag bar glued under the window.
     -- Main.AbsoluteSize does not refresh until the next frame, so derive the
@@ -3204,6 +3473,10 @@ local function SetupDragBar()
     end)
 end
 
+-- Defined with the settings builders further down; declared here because
+-- the open/close animations below call it.
+local RefreshSettingsSize
+
 local function CloseSettingsDropdown()
     if not SettingsDropdownOpen then return end
 
@@ -3219,7 +3492,7 @@ local function CloseSettingsDropdown()
     local Toggle = Dropdown:FindFirstChild("Toggle")
 
     TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 195, 0, 40)}):Play()
-    TweenService:Create(SettingsFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 210, 0, 130)}):Play()
+    RefreshSettingsSize(true, false)
 
     for _, opt in ipairs(List:GetChildren()) do
         if opt:IsA("Frame") and opt.Name ~= "Template" and opt.Name ~= "PlaceHolder" then
@@ -3615,7 +3888,8 @@ function OpenSettings()
     SetAllTransparent(SettingsFrame)
     SettingsFrame.Visible = true
 
-    Tween(SettingsFrame, 0.4, {BackgroundTransparency = 0, Size = UDim2.new(0, 210,0, 303)})
+    Tween(SettingsFrame, 0.4, {BackgroundTransparency = 0})
+    RefreshSettingsSize(true, SettingsDropdownOpen)
 
     if SettingsFrame:FindFirstChild("UIStroke") then
         Tween(SettingsFrame.UIStroke, 0.4, {Transparency = 0})
@@ -4354,6 +4628,126 @@ end
 local SettingsToggles = {}
 SettingsTogglesRef = function() return SettingsToggles end
 
+--[[ Measure the settings panel from the rows it actually contains.
+
+     The height was hardcoded to 303 in four places. Once extra rows were
+     added the panel grew/shrank independently of its contents, which is why
+     it started looking oddly tall with empty space at the bottom. ]]
+local function SettingsContentHeight()
+    local Frame = SettingsFrame:FindFirstChild("Frame")
+    if not Frame then return 303 end
+
+    local total = Layout.SettingsPadTop
+    local rows = 0
+    for _, child in ipairs(Frame:GetChildren()) do
+        if child:IsA("GuiObject") and child.Visible then
+            total = total + child.AbsoluteSize.Y
+            rows = rows + 1
+        end
+    end
+
+    -- AbsoluteSize is 0 before the first render; fall back to the offset
+    if total <= Layout.SettingsPadTop then
+        total = Layout.SettingsPadTop
+        for _, child in ipairs(Frame:GetChildren()) do
+            if child:IsA("GuiObject") and child.Visible then
+                total = total + (child.Size.Y.Offset > 0 and child.Size.Y.Offset or 40)
+            end
+        end
+    end
+
+    if rows > 1 then
+        total = total + (rows - 1) * Layout.SettingsRowGap
+    end
+    return math.clamp(total + Layout.SettingsPadBottom, 120, 560)
+end
+
+-- Resize the settings panel to fit its contents.
+function RefreshSettingsSize(animated, dropdownOpen)
+    local h = SettingsContentHeight()
+    if dropdownOpen then
+        h = h + Layout.SettingsDropdownOpenExtra
+    end
+    local target = UDim2.new(0, Layout.SettingsWidth, 0, h)
+    if animated then
+        Tween(SettingsFrame, 0.4, {Size = target})
+    else
+        SettingsFrame.Size = target
+    end
+    return h
+end
+
+--[[ A clickable row in the settings panel, cloned from the existing
+     "Button" row so it matches the asset. Same idea as MakeSettingsToggle,
+     for actions rather than on/off state. ]]
+local SettingsButtons = {}
+SettingsButtonsRef = function() return SettingsButtons end
+
+local function MakeSettingsButton(opts)
+    local Frame = SettingsFrame:FindFirstChild("Frame")
+    if not Frame then return end
+
+    local Source = Frame:FindFirstChild("Button")
+    if not Source then return end
+
+    local Row = Frame:FindFirstChild(opts.Name)
+    if not Row then
+        Row = Source:Clone()
+        Row.Name = opts.Name
+        Row.Parent = Frame
+    end
+
+    Row.Visible = true
+    if opts.LayoutOrder then Row.LayoutOrder = opts.LayoutOrder end
+
+    local title = Row:FindFirstChild("Title")
+    if title then
+        title.Text = opts.Title or opts.Name
+        if SelectedTheme then title.TextColor3 = SelectedTheme.TextColor end
+        title.TextTransparency = 0
+    end
+
+    -- The stock Button row has a "Copy" hint on the right; repurpose it
+    local hint = Row:FindFirstChild("ElementIndicator")
+    if hint and hint:IsA("TextLabel") then
+        hint.Text = opts.Hint or ""
+    end
+
+    local function Paint()
+        if not SelectedTheme then return end
+        Row.BackgroundColor3 = SelectedTheme.ElementBackground
+        if Row:FindFirstChild("UIStroke") then
+            Row.UIStroke.Color = SelectedTheme.ElementStroke
+        end
+        if title then title.TextColor3 = SelectedTheme.TextColor end
+    end
+    Paint()
+
+    Row.MouseEnter:Connect(function()
+        if SelectedTheme then
+            TweenService:Create(Row, TweenInfo.new(0.4, Enum.EasingStyle.Quint),
+                {BackgroundColor3 = SelectedTheme.ElementBackgroundHover}):Play()
+        end
+    end)
+    Row.MouseLeave:Connect(function()
+        if SelectedTheme then
+            TweenService:Create(Row, TweenInfo.new(0.4, Enum.EasingStyle.Quint),
+                {BackgroundColor3 = SelectedTheme.ElementBackground}):Play()
+        end
+    end)
+
+    local interact = Row:FindFirstChild("Interact")
+    if interact then
+        interact.MouseButton1Click:Connect(function()
+            if opts.Callback then task.spawn(opts.Callback, Row) end
+        end)
+    end
+
+    RegisterFadeTarget(SettingsFrame, Row, Source)
+    SettingsButtons[opts.Name] = { Instance = Row, Paint = Paint }
+    return SettingsButtons[opts.Name]
+end
+
 local function MakeSettingsToggle(opts)
     local Frame = SettingsFrame:FindFirstChild("Frame")
     if not Frame then return end
@@ -4448,6 +4842,11 @@ local function MakeSettingsToggle(opts)
             task.spawn(opts.Callback, newValue)
         end
     end)
+
+    -- Rows created after StoreOriginalTransparencies() ran are absent from
+    -- the fade cache, so FadeIn() never restores them and they stay
+    -- invisible while still taking up height. Register them now.
+    RegisterFadeTarget(SettingsFrame, Toggle, Source)
 
     -- Registered so ApplyTheme can repaint every toggle generically
     SettingsToggles[opts.Name] = {
@@ -4803,7 +5202,7 @@ local function SetupSettingsThemeDropdown()
                 task.wait(0.2)
 
                 TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 195, 0, 40)}):Play()
-                TweenService:Create(SettingsFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 210, 0, 303)}):Play()
+                RefreshSettingsSize(true, false)
 
                 for _, opt in ipairs(List:GetChildren()) do
                     if opt:IsA("Frame") and opt.Name ~= "Template" and opt.Name ~= "PlaceHolder" then
@@ -4845,7 +5244,7 @@ local function SetupSettingsThemeDropdown()
         Interact.MouseButton1Click:Connect(function()
             if SettingsDropdownOpen then
                 TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 195, 0, 40)}):Play()
-                TweenService:Create(SettingsFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 210, 0, 303)}):Play()
+                RefreshSettingsSize(true, false)
 
                 for _, opt in ipairs(List:GetChildren()) do
                     if opt:IsA("Frame") and opt.Name ~= "Template" and opt.Name ~= "PlaceHolder" then
@@ -4869,7 +5268,7 @@ local function SetupSettingsThemeDropdown()
                 SettingsDropdownOpen = false
             else
                 TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 195, 0, 180)}):Play()
-                TweenService:Create(SettingsFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 210, 0, 270)}):Play()
+                RefreshSettingsSize(true, true)
 
                 List.Visible = true
                 TweenService:Create(List, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {ScrollBarImageTransparency = 0.7}):Play()
@@ -4980,6 +5379,9 @@ function ArrayFieldLibrary:CreateWindow(Settings)
     end
 
     Topbar.Title.Text = Settings.Name or "ArrayField"
+    -- Long window titles used to just overflow into the topbar buttons.
+    Topbar.Title.TextTruncate = Enum.TextTruncate.AtEnd
+    StartMarquee(Topbar.Title)
     Main.Size = UDim2.new(0, 250, 0, 260)
     Main.Visible = true
     Main.BackgroundTransparency = 1
@@ -5116,6 +5518,33 @@ function ArrayFieldLibrary:CreateWindow(Settings)
         ConfigKey = "SaveThemeColors",
         LayoutOrder = 23,
     }
+
+    -- Size presets live in settings too, so the controls aren't stuck in
+    -- whatever tab the script author happened to build.
+    do
+        local presets = {
+            { name = "Compact",  w = 520, h = 300 },
+            { name = "Default",  w = Layout.DefaultWidth, h = Layout.DefaultHeight },
+            { name = "Portrait", w = 530, h = 600 },
+            { name = "Tall",     w = 620, h = 560 },
+        }
+        local index = 1
+        MakeSettingsButton{
+            Name = "SizePreset",
+            Title = "Window Size",
+            Hint = presets[2].name,
+            LayoutOrder = 24,
+            Callback = function(row)
+                index = index % #presets + 1
+                local p = presets[index]
+                ApplyWindowSize(p.w, p.h, true)
+                ApplyLayoutMode(true)
+                local hint = row and row:FindFirstChild("ElementIndicator")
+                if hint then hint.Text = p.name end
+                RefreshSettingsSize(true, SettingsDropdownOpen)
+            end,
+        }
+    end
 
     -- Restore the saved window size / layout before the reveal animation
     if Config.Get("SaveWindowSize") then
@@ -5532,88 +5961,6 @@ function Window:CreateCategory(Name, Settings)
     return CategoryValue
 end
 
-local function StartMarquee(textLabel)
-	task.spawn(function()
-		local parent = textLabel.Parent
-		if not parent then return end
-		parent.ClipsDescendants = true
-
-		task.wait(3)
-
-		local origPos = textLabel.Position
-
-		local isInCategory = parent.Parent and parent.Parent:IsA("Frame") and parent.Parent.Name == "Holder"
-
-		local function GetVisibleRight()
-			local right = parent.AbsolutePosition.X + parent.AbsoluteSize.X
-			local current = parent.Parent
-			while current and current:IsA("GuiObject") do
-				if current.ClipsDescendants then
-					local parentRight = current.AbsolutePosition.X + current.AbsoluteSize.X
-					if parentRight < right then
-						right = parentRight
-					end
-				end
-				current = current.Parent
-			end
-			return right
-		end
-
-		while textLabel and textLabel.Parent do
-			if Minimised or textLabel.TextTransparency >= 0.9 then
-				task.wait(1)
-				continue
-			end
-
-			textLabel.Position = origPos
-
-			task.wait()
-
-			local textWidth = textLabel.TextBounds.X
-			local visibleRight = GetVisibleRight()
-			local textLeft = textLabel.AbsolutePosition.X
-			local visibleWidth = visibleRight - textLeft
-
-			local threshold = isInCategory and 3 or 2
-			if textWidth <= visibleWidth + threshold or visibleWidth <= 1 then
-				task.wait(2)
-				continue
-			end
-
-			local overflow = textWidth - visibleWidth + 5
-
-			task.wait(2)
-			if not (textLabel and textLabel.Parent) then break end
-			if Minimised or textLabel.TextTransparency >= 0.9 then
-				textLabel.Position = origPos
-				continue
-			end
-
-			local dur = math.clamp(overflow / 35, 0.5, 8)
-			local scrollTween = TweenService:Create(textLabel, TweenInfo.new(dur, Enum.EasingStyle.Linear), {
-				Position = UDim2.new(origPos.X.Scale, origPos.X.Offset - overflow, origPos.Y.Scale, origPos.Y.Offset)
-			})
-			scrollTween:Play()
-			scrollTween.Completed:Wait()
-
-			task.wait(1)
-			if not (textLabel and textLabel.Parent) then break end
-
-			local curTrans = textLabel.TextTransparency
-			TweenService:Create(textLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-			task.wait(0.35)
-
-			if not (textLabel and textLabel.Parent) then break end
-
-			textLabel.Position = origPos
-
-			TweenService:Create(textLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = curTrans}):Play()
-			task.wait(0.35)
-
-			task.wait(1.5)
-		end
-	end)
-end
 
 -- Tab
 function Window:CreateTab(Name, Image, CategoryParent)
