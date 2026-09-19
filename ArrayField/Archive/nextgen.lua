@@ -1248,7 +1248,12 @@ local Layout = {
     CollapsedHeight= 45,
     TopbarHeight   = 45,
     ElementsInset  = 65,    -- vertical space taken by topbar + padding
-    SidebarScale   = 0.74,  -- Elements width when sidebar is visible
+    SidebarScale   = 0.74,  -- legacy fallback (see SidebarWidth)
+    -- The sidebar used to be a % of the window, so it ballooned as the
+    -- window got wider (166px looked right, 232px did not). It is now a
+    -- fixed pixel width, matching the stock look at the default size.
+    SidebarWidth   = 174,
+    SidebarGap     = 4,     -- space between sidebar and the element column
     OGScale        = 0.955, -- Elements width in OG mode (small side margins)
     SidebarHideAt  = 560,   -- auto-drop the sidebar below this width
 
@@ -1259,15 +1264,17 @@ local Layout = {
     OGElementsTop  = 94,    -- y offset where elements begin in OG mode
     OGTabPillGap   = 8,
 
-    -- Elements used to be a hardcoded 465px wide, so widening the window
-    -- only ever added dead space on the right. They now fill their
-    -- container minus this padding.
-    ElementRightPad   = 12,
-    ParagraphTextPad  = 40,
+    -- Elements grow with the window but only up to ElementMaxWidth; past
+    -- that they stay put and stay CENTRED, so margins are always even.
+    -- (A right-only pad gave 11px left / 23px right, which is the uneven
+    -- gap that looked bad. Padding is now applied to both sides.)
+    ElementSidePad   = 5,    -- per side, so total inset is 2x this
+    ElementMaxWidth  = 500,  -- natural stock width is 465; this is the ceiling
+    ParagraphTextPad = 40,
 
-    -- Past this width the element column stops growing (it just looks
-    -- stretched and wastes space), so the window stops widening too.
-    MaxContentWidth = 820,
+    -- Past this width the element column stops growing, so the window
+    -- stops widening too rather than adding dead space.
+    MaxContentWidth = 560,
 
     -- Portrait-friendly floors: the UI is usable held like a phone.
     MinPortraitWidth = 300,
@@ -1280,10 +1287,20 @@ local SidebarActiveRef
 -- Usable text width inside an element, used for description wrapping.
 -- Derived from the live window so long descriptions wrap correctly at
 -- any size instead of against a fixed 400px.
+-- Wrap width for element descriptions.
+--
+-- This was briefly made window-relative, which changed how text wrapped at
+-- different sizes (you noticed). Elements are now capped at ElementMaxWidth,
+-- so the wrap width is stable again and matches the original 400px feel,
+-- only shrinking when the element itself is genuinely narrower.
 local function ElementTextWidth()
-    local scale = SidebarActiveRef and SidebarActiveRef() and Layout.SidebarScale or Layout.OGScale
-    local w = (CurrentWidthRef and CurrentWidthRef() or Layout.DefaultWidth) * scale
-    return math.clamp(math.floor(w - 70), 180, Layout.MaxContentWidth)
+    local elementW = Layout.ElementMaxWidth - Layout.ElementSidePad * 2
+    local available = (CurrentWidthRef and CurrentWidthRef() or Layout.DefaultWidth)
+    if SidebarActiveRef and SidebarActiveRef() then
+        available = available - Layout.SidebarWidth - Layout.SidebarGap * 2
+    end
+    available = available - Layout.ElementSidePad * 2
+    return math.clamp(math.floor(math.min(elementW, available) - 65), 180, 400)
 end
 
 -- current live size (kept in sync by ApplyWindowSize)
@@ -2604,9 +2621,11 @@ local function ReflowSidebar(animated)
     local topGap = SideTabList:GetAttribute("OrigYOffset") or 60
     -- bottom margin mirrors the top gap so it looks balanced at any height
     local bottomGap = 14
+    -- Fixed pixel width: as a percentage it grew with the window and looked
+    -- oversized on wide layouts.
     local targetSize = UDim2.new(
-        SideTabList.Size.X.Scale,
-        SideTabList.Size.X.Offset,
+        0,
+        Layout.SidebarWidth,
         1,
         -(topGap + bottomGap)
     )
@@ -2636,13 +2655,27 @@ local function ReflowElements(animated)
     local targetSize, targetPos
 
     if SidebarActive() then
-        targetSize = UDim2.new(scale, 0, 1, -Layout.ElementsInset)
+        -- The sidebar is a fixed pixel width now, so the element column takes
+        -- "everything to the right of it" rather than a fixed percentage.
+        local sideEdge = (SideTabList.Position.X.Offset or 14) + Layout.SidebarWidth + Layout.SidebarGap
+        targetSize = UDim2.new(1, -(sideEdge + Layout.SidebarGap), 1, -Layout.ElementsInset)
         targetPos = UDim2.new(
-            Elements:GetAttribute("OrigPosXScale")  or 0.26,
-            Elements:GetAttribute("OrigPosXOffset") or 0,
+            anchorX,
+            sideEdge - anchorX * -(sideEdge + Layout.SidebarGap),
             Elements:GetAttribute("OrigPosYScale")  or 0,
             Elements:GetAttribute("OrigPosYOffset") or 60
         )
+        -- Simple exact case: left-anchored column starting after the sidebar
+        if anchorX == 0 then
+            targetPos = UDim2.new(0, sideEdge,
+                Elements:GetAttribute("OrigPosYScale") or 0,
+                Elements:GetAttribute("OrigPosYOffset") or 60)
+        elseif anchorX == 0.5 then
+            -- centre of the remaining space
+            targetPos = UDim2.new(0.5, (sideEdge - Layout.SidebarGap) / 2,
+                Elements:GetAttribute("OrigPosYScale") or 0,
+                Elements:GetAttribute("OrigPosYOffset") or 60)
+        end
     else
         -- OG mode: full-width list sitting below the in-window tab strip.
         local topOffset = Layout.OGElementsTop
@@ -2682,7 +2715,21 @@ local function MakeTemplatesResponsive()
 
     for _, child in ipairs(T:GetChildren()) do
         if child:IsA("GuiObject") and child.Size.X.Scale == 0 and child.Size.X.Offset > 200 then
-            child.Size = UDim2.new(1, -Layout.ElementRightPad, 0, child.Size.Y.Offset)
+            child.Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, child.Size.Y.Offset)
+
+            -- Centre the element and cap how wide it may grow. Without this
+            -- the pad applied to one side only, giving 11px left / 23px right
+            -- (the uneven gap in your screenshot), and elements stretched far
+            -- past their natural width on wide windows.
+            child.AnchorPoint = Vector2.new(0.5, child.AnchorPoint.Y)
+            child.Position = UDim2.new(0.5, 0, child.Position.Y.Scale, child.Position.Y.Offset)
+
+            local cap = child:FindFirstChildOfClass("UISizeConstraint")
+            if not cap then
+                cap = Instance.new("UISizeConstraint")
+                cap.Parent = child
+            end
+            cap.MaxSize = Vector2.new(Layout.ElementMaxWidth, math.huge)
         end
     end
 end
@@ -2690,9 +2737,16 @@ end
 -- Widest useful window: past the point where the element column stops
 -- growing, extra width is just dead space, so we refuse to go wider.
 local function EffectiveMaxWidth()
-    local scale = SidebarActive() and Layout.SidebarScale or Layout.OGScale
-    -- width at which the content column hits MaxContentWidth
-    local cap = math.floor(Layout.MaxContentWidth / scale)
+    -- Widest window where the element column is still doing something useful.
+    -- Elements cap at ElementMaxWidth, so anything past (column + chrome) is
+    -- pure dead space.
+    local cap
+    if SidebarActive() then
+        -- sidebar is a fixed width, so add it rather than scaling
+        cap = Layout.SidebarWidth + Layout.SidebarGap * 2 + Layout.MaxContentWidth
+    else
+        cap = math.floor(Layout.MaxContentWidth / Layout.OGScale)
+    end
     return math.clamp(cap, Layout.MinWidth, Layout.MaxWidth)
 end
 
@@ -6288,7 +6342,7 @@ end
                     }):Play()
 
                     local newHeight = 40 + DescriptionLabel.AbsoluteSize.Y + 12
-                    TweenService:Create(Button, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, newHeight)}):Play()
+                    TweenService:Create(Button, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, newHeight)}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
                 end
             end)
@@ -6306,7 +6360,7 @@ end
 
                     TweenService:Create(Button.Title, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = OriginalTitlePosition}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-                    TweenService:Create(Button, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)}):Play()
+                    TweenService:Create(Button, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)}):Play()
 
                     task.delay(0.3, function()
                         if not DescriptionVisible then
@@ -6475,7 +6529,7 @@ end
                     }):Play()
 
                     local newHeight = 40 + DescriptionLabel.AbsoluteSize.Y + 12
-                    TweenService:Create(Toggle, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, newHeight)}):Play()
+                    TweenService:Create(Toggle, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, newHeight)}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
                 end
             end)
@@ -6488,7 +6542,7 @@ end
 
                     TweenService:Create(Toggle.Title, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = OriginalTitlePosition}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-                    TweenService:Create(Toggle, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)}):Play()
+                    TweenService:Create(Toggle, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)}):Play()
 
                     task.delay(0.3, function()
                         if not DescriptionVisible then
@@ -6746,7 +6800,7 @@ end
                 if SliderSettings.Description and DescriptionLabel and not DescriptionVisible then
                     DescriptionVisible = true
                     DescriptionLabel.Visible = true
-                    TweenService:Create(Slider, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 45 + DescriptionLabel.AbsoluteSize.Y + 12)}):Play()
+                    TweenService:Create(Slider, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 45 + DescriptionLabel.AbsoluteSize.Y + 12)}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
                 end
             end)
@@ -6757,7 +6811,7 @@ end
                 if SliderSettings.Description and DescriptionLabel and DescriptionVisible then
                     DescriptionVisible = false
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-                    TweenService:Create(Slider, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 45)}):Play()
+                    TweenService:Create(Slider, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 45)}):Play()
                     task.delay(0.3, function()
                         if not DescriptionVisible then DescriptionLabel.Visible = false end
                     end)
@@ -7039,7 +7093,7 @@ end
                     }):Play()
 
                     local newHeight = 40 + DescriptionLabel.AbsoluteSize.Y + 12
-                    TweenService:Create(Input, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, newHeight)}):Play()
+                    TweenService:Create(Input, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, newHeight)}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
                 end
             end)
@@ -7052,7 +7106,7 @@ end
 
                     TweenService:Create(Input.Title, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = OriginalTitlePosition}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-                    TweenService:Create(Input, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)}):Play()
+                    TweenService:Create(Input, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)}):Play()
 
                     task.delay(0.3, function()
                         if not DescriptionVisible then
@@ -7211,7 +7265,7 @@ end
                     }):Play()
 
                     local newHeight = 40 + DescriptionLabel.AbsoluteSize.Y + 12
-                    TweenService:Create(Keybind, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, newHeight)}):Play()
+                    TweenService:Create(Keybind, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, newHeight)}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
                 end
             end)
@@ -7224,7 +7278,7 @@ end
 
                     TweenService:Create(Keybind.Title, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = OriginalTitlePosition}):Play()
                     TweenService:Create(DescriptionLabel, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {TextTransparency = 1}):Play()
-                    TweenService:Create(Keybind, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)}):Play()
+                    TweenService:Create(Keybind, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)}):Play()
 
                     task.delay(0.3, function()
                         if not DescriptionVisible then
@@ -7694,7 +7748,7 @@ end
 
                 if Paragraph.Parent == TabPage then
                     Paragraph.Content.Size = UDim2.new(1, -Layout.ParagraphTextPad, 0, textHeight)
-                    Paragraph.Size = UDim2.new(1, -Layout.ElementRightPad, 0, textHeight + 40)
+                    Paragraph.Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, textHeight + 40)
                 else
                     Paragraph.Content.Size = UDim2.new(1, -Layout.ParagraphTextPad, 0, textHeight)
                     Paragraph.Size = UDim2.new(1, -12, 0, textHeight + 40)
@@ -7891,7 +7945,7 @@ end
             Dropdown.BackgroundTransparency = 1
             Dropdown.UIStroke.Transparency = 1
             Dropdown.Title.TextTransparency = 1
-            Dropdown.Size = UDim2.new(1, -Layout.ElementRightPad, 0, 44)
+            Dropdown.Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 44)
 
             if SelectedTheme then
                 Dropdown.BackgroundColor3 = SelectedTheme.ElementBackground
@@ -7944,7 +7998,7 @@ end
 
                 if Dropdown.List.Visible then
                     DropdownDebounce = true
-                    TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 44)}):Play()
+                    TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 44)}):Play()
 
                     for _, DropdownOpt in ipairs(Dropdown.List:GetChildren()) do
                         if DropdownOpt.ClassName == "Frame" and DropdownOpt.Name ~= "PlaceHolder" and DropdownOpt ~= SearchBar then
@@ -7969,7 +8023,7 @@ end
                     Dropdown.List.Visible = false
                     DropdownDebounce = false
                 else
-                    TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 178)}):Play()
+                    TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 178)}):Play()
                     Dropdown.List.Visible = true
                     TweenService:Create(Dropdown.List, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {ScrollBarImageTransparency = 0.7}):Play()
                     TweenService:Create(Dropdown.Toggle, TweenInfo.new(0.7, Enum.EasingStyle.Quint), {Rotation = 0}):Play()
@@ -8154,7 +8208,7 @@ end
                     task.wait(0.1)
 
                     if not Multi then
-                        TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 45)}):Play()
+                        TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 45)}):Play()
 
                         TweenService:Create(SearchBar, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {BackgroundTransparency = 1}):Play()
                         TweenService:Create(SearchBar.UIStroke, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Transparency = 1}):Play()
@@ -8304,7 +8358,7 @@ end
                 DropdownSettings.Locked = true
                 DropdownDebounce = true
 
-                TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 44)}):Play()
+                TweenService:Create(Dropdown, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 44)}):Play()
 
                 TweenService:Create(SearchBar, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {BackgroundTransparency = 1}):Play()
                 TweenService:Create(SearchBar.UIStroke, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Transparency = 1}):Play()
@@ -8391,7 +8445,7 @@ end
             if SectionParent then
                 Console.Size = UDim2.new(1, -12, 0, ConsoleHeight + 40)
             else
-                Console.Size = UDim2.new(1, -Layout.ElementRightPad, 0, ConsoleHeight + 40)
+                Console.Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, ConsoleHeight + 40)
             end
 
             local ConsoleCorner = Instance.new("UICorner")
@@ -8888,7 +8942,7 @@ end
                 ColorPicker.Parent = TabPage
             end
 
-            ColorPicker.Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)
+            ColorPicker.Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)
             ColorPicker.ColorSlider.Visible = false
             ColorPicker.HexInput.Visible = false
             ColorPicker.RGB.Visible = false
@@ -8919,7 +8973,7 @@ end
                     ColorPicker.ColorSlider.Visible = true
                     ColorPicker.HexInput.Visible = true
                     ColorPicker.RGB.Visible = true
-                    TweenService:Create(ColorPicker, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 120)}):Play()
+                    TweenService:Create(ColorPicker, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 120)}):Play()
                     TweenService:Create(Background, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 173, 0, 86)}):Play()
                     TweenService:Create(Display, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {BackgroundTransparency = 1}):Play()
                     TweenService:Create(ColorPicker.Interact, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Position = UDim2.new(0.289, 0, 0.5, 0)}):Play()
@@ -8937,7 +8991,7 @@ end
                     ColorPicker.ColorSlider.Visible = false
                     ColorPicker.HexInput.Visible = false
                     ColorPicker.RGB.Visible = false
-                    TweenService:Create(ColorPicker, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)}):Play()
+                    TweenService:Create(ColorPicker, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)}):Play()
                     TweenService:Create(Background, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 39, 0, 22)}):Play()
                     TweenService:Create(ColorPicker.Interact, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, 0, 1, 0)}):Play()
                     TweenService:Create(ColorPicker.Interact, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Position = UDim2.new(0.5, 0, 0.7, 0)}):Play()
@@ -9140,7 +9194,7 @@ end
                 ColorPicker.ColorSlider.Visible = false
                 ColorPicker.HexInput.Visible = false
                 ColorPicker.RGB.Visible = false
-                TweenService:Create(ColorPicker, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementRightPad, 0, 40)}):Play()
+                TweenService:Create(ColorPicker, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, -Layout.ElementSidePad * 2, 0, 40)}):Play()
                 TweenService:Create(Background, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 39, 0, 22)}):Play()
                 TweenService:Create(ColorPicker.Interact, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Size = UDim2.new(1, 0, 1, 0)}):Play()
                 TweenService:Create(ColorPicker.Interact, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Position = UDim2.new(0.5, 0, 0.5, 0)}):Play()
