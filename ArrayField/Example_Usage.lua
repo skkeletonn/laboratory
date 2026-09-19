@@ -262,7 +262,7 @@ MainTab:CreateImage(WelcomeSection, {
 -- CONSOLE
 -- ============================
 
-local MyConsole = Tab:CreateConsole({
+local MyConsole = MainTab:CreateConsole({
     Title = "Event Logger",
     Icon = "terminal",
     MaxLines = 200,
@@ -402,4 +402,4 @@ print(ArrayFieldLibrary.Flags["SpeedValue"].CurrentValue)
 -- DESTROYING THE UI
 -- ============================
 
-ArrayFieldLibrary:Destroy()  -- Completely removes the UI
+--ArrayFieldLibrary:Destroy()  -- Completely removes the UI
