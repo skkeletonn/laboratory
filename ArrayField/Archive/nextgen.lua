@@ -1246,8 +1246,15 @@ local Layout = {
     TopbarHeight   = 45,
     ElementsInset  = 65,    -- vertical space taken by topbar + padding
     SidebarScale   = 0.74,  -- Elements width when sidebar is visible
-    OGScale        = 1,     -- Elements width in OG (no sidebar) mode
+    OGScale        = 0.955, -- Elements width in OG mode (small side margins)
     SidebarHideAt  = 560,   -- auto-drop the sidebar below this width
+
+    -- OG (old-Rayfield) layout: tab pills sit INSIDE the window, directly
+    -- under the titlebar, and the element list starts below them.
+    OGTabBarHeight = 34,
+    OGTabBarTop    = 52,    -- y offset of the tab strip from the window top
+    OGElementsTop  = 94,    -- y offset where elements begin in OG mode
+    OGTabPillGap   = 8,
 }
 
 -- current live size (kept in sync by ApplyWindowSize)
@@ -2534,37 +2541,62 @@ local function ElementsScale()
     return SidebarActive() and Layout.SidebarScale or Layout.OGScale
 end
 
--- Reflow the Elements container + drag bar to match the window
+-- Remember the asset's original sidebar-mode geometry exactly once, so
+-- switching back to the sidebar restores it byte-for-byte.
+local function CacheSidebarGeometry()
+    if Elements:GetAttribute("GeomCached") then return end
+    Elements:SetAttribute("GeomCached", true)
+    Elements:SetAttribute("OrigPosXScale",  Elements.Position.X.Scale)
+    Elements:SetAttribute("OrigPosXOffset", Elements.Position.X.Offset)
+    Elements:SetAttribute("OrigPosYScale",  Elements.Position.Y.Scale)
+    Elements:SetAttribute("OrigPosYOffset", Elements.Position.Y.Offset)
+end
+
+-- Reflow the Elements container to match the window + current mode.
+--
+-- IMPORTANT: Elements.AnchorPoint.X is 0.5 in the asset, so its Position
+-- refers to its CENTRE, not its left edge. Setting Position.X = 0 puts the
+-- centre on the window's left edge and throws the whole list outside the
+-- window. Every offset below is therefore computed from the live AnchorPoint.
 local function ReflowElements(animated)
+    CacheSidebarGeometry()
+
     local scale = ElementsScale()
-    local targetSize = UDim2.new(scale, 0, 1, -Layout.ElementsInset)
+    local anchorX = Elements.AnchorPoint.X
+    local anchorY = Elements.AnchorPoint.Y
+
+    local targetSize, targetPos
+
+    if SidebarActive() then
+        targetSize = UDim2.new(scale, 0, 1, -Layout.ElementsInset)
+        targetPos = UDim2.new(
+            Elements:GetAttribute("OrigPosXScale")  or 0.26,
+            Elements:GetAttribute("OrigPosXOffset") or 0,
+            Elements:GetAttribute("OrigPosYScale")  or 0,
+            Elements:GetAttribute("OrigPosYOffset") or 60
+        )
+    else
+        -- OG mode: full-width list sitting below the in-window tab strip.
+        local topOffset = Layout.OGElementsTop
+        targetSize = UDim2.new(scale, 0, 1, -(topOffset + 12))
+        -- Centre horizontally within Main, honouring the anchor.
+        targetPos = UDim2.new(
+            anchorX * scale,           -- anchor-corrected x
+            0,
+            0,
+            topOffset + anchorY * (Main.AbsoluteSize.Y - topOffset - 12)
+        )
+        -- Vertical anchor is 0 in the stock asset; keep it simple and exact.
+        if anchorY == 0 then
+            targetPos = UDim2.new(anchorX * scale, 0, 0, topOffset)
+        end
+    end
 
     if animated then
-        Tween(Elements, 0.35, {Size = targetSize})
+        Tween(Elements, 0.35, {Size = targetSize, Position = targetPos})
     else
         Elements.Size = targetSize
-    end
-
-    -- In OG mode the elements start at the left edge; with a sidebar
-    -- they sit to the right of it (original anchoring is preserved by
-    -- the asset, so we only need to nudge position in OG mode).
-    local targetPos
-    if SidebarActive() then
-        targetPos = Elements:GetAttribute("SidebarPosition")
-        if targetPos == nil then
-            targetPos = Elements.Position
-            Elements:SetAttribute("SidebarPosition", targetPos)
-        end
-    else
-        targetPos = UDim2.new(0, 0, Elements.Position.Y.Scale, Elements.Position.Y.Offset)
-    end
-
-    if typeof(targetPos) == "UDim2" then
-        if animated then
-            Tween(Elements, 0.35, {Position = targetPos})
-        else
-            Elements.Position = targetPos
-        end
+        Elements.Position = targetPos
     end
 end
 
@@ -2591,13 +2623,20 @@ function ApplyWindowSize(width, height, animated, skipSave)
 
     ReflowElements(animated)
 
-    -- Keep the drag bar glued under the window
+    -- Keep the drag bar glued under the window.
+    -- Main.AbsoluteSize does not refresh until the next frame, so derive the
+    -- centre from the size we just applied instead of reading it back.
     dragOffset = math.floor(height / 2) + 15
     if Drag and Drag.Visible then
-        Drag.Position = UDim2.fromOffset(
-            Main.AbsolutePosition.X + Main.AbsoluteSize.X / 2,
-            Main.AbsolutePosition.Y + Main.AbsoluteSize.Y / 2 + dragOffset
-        )
+        local centreX = Main.AbsolutePosition.X + width / 2
+        local centreY = Main.AbsolutePosition.Y + height / 2
+        Drag.Position = UDim2.fromOffset(centreX, centreY + dragOffset)
+    end
+
+    -- The drag bar cosmetic tracks the window width so it never overhangs
+    if DragCosmetic then
+        local barWidth = math.clamp(math.floor(width * 0.37), 120, 320)
+        DragCosmetic.Size = UDim2.new(0, barWidth, 0, 4)
     end
 
     if not skipSave and Config.Get("SaveWindowSize") then
@@ -2616,16 +2655,54 @@ function ApplyLayoutMode(animated)
         if TopList then TopList.Visible = false end
         SideTabList.Visible = not SideBarClosed
     else
-        -- OG layout: show the top tab strip, hide the side list
+        -- OG layout: horizontal tab pills INSIDE the window, directly under
+        -- the titlebar, exactly like old Rayfield. (Previously this strip was
+        -- being positioned with the wrong anchor and landed outside Main.)
         SideTabList.Visible = false
         if TopList then
+            local anchorX = TopList.AnchorPoint.X
+            local anchorY = TopList.AnchorPoint.Y
+
             TopList.Visible = true
-            -- The top strip lives just under the topbar, full width
-            TopList.Position = UDim2.new(0, 10, 0, Layout.TopbarHeight + 5)
-            TopList.Size = UDim2.new(1, -20, 0, 30)
+            TopList.Size = UDim2.new(1, -24, 0, Layout.OGTabBarHeight)
+            TopList.Position = UDim2.new(
+                anchorX,                                       -- anchor-corrected
+                anchorX == 0 and 12 or 0,
+                0,
+                Layout.OGTabBarTop + anchorY * Layout.OGTabBarHeight
+            )
+            TopList.BackgroundTransparency = 1
+
+            -- Lay the pills out left-to-right
+            local layout = TopList:FindFirstChildOfClass("UIListLayout")
+            if not layout then
+                layout = Instance.new("UIListLayout")
+                layout.Parent = TopList
+            end
+            layout.FillDirection = Enum.FillDirection.Horizontal
+            layout.SortOrder = Enum.SortOrder.LayoutOrder
+            layout.VerticalAlignment = Enum.VerticalAlignment.Center
+            layout.Padding = UDim.new(0, Layout.OGTabPillGap)
+
+            if TopList:IsA("ScrollingFrame") then
+                TopList.ScrollingDirection = Enum.ScrollingDirection.X
+                TopList.ScrollBarThickness = 0
+                TopList.CanvasSize = UDim2.new(0, 0, 0, 0)
+                TopList.AutomaticCanvasSize = Enum.AutomaticSize.X
+            end
+
             for _, btn in ipairs(TopList:GetChildren()) do
                 if btn:IsA("Frame") and btn.Name ~= "Template" and btn.Name ~= "Placeholder" then
                     btn.Visible = true
+                    btn.AnchorPoint = Vector2.new(0, 0)
+                    btn.Position = UDim2.new(0, 0, 0, 0)
+                    -- Pill width follows the label, like old Rayfield
+                    local title = btn:FindFirstChild("Title")
+                    local w = 90
+                    if title then
+                        w = math.max(70, math.floor(title.TextBounds.X) + 42)
+                    end
+                    btn.Size = UDim2.new(0, w, 0, Layout.OGTabBarHeight - 4)
                 end
             end
         end
@@ -2679,10 +2756,24 @@ end
 
 local ResizeGrip = nil
 
+--[[ ============================================================
+     RESIZE GRIP
+     ------------------------------------------------------------
+     Behaves like the bottom drag bar: hover to highlight, press and
+     drag to act. Works on PC (mouse) and mobile (touch) by tracking
+     the originating InputObject instead of polling the mouse, which
+     is what makes touch work at all.
+
+     Lucide "spline" points top-left by default, so it is rotated
+     180 degrees to read as a bottom-right corner grip.
+     ============================================================ ]]
 local function SetupResizeGrip()
     if ResizeGrip then return ResizeGrip end
 
-    -- Prefer an instance from the asset if one exists
+    local GRIP = 22           -- visual size
+    local TOUCH_PAD = 16      -- extra invisible hit area for fingers
+
+    -- Prefer a real instance from the asset if you add one later
     local existing = Main:FindFirstChild("ResizeGrip")
     if existing then
         ResizeGrip = existing
@@ -2690,12 +2781,13 @@ local function SetupResizeGrip()
         ResizeGrip = Instance.new("ImageButton")
         ResizeGrip.Name = "ResizeGrip"
         ResizeGrip.BackgroundTransparency = 1
-        ResizeGrip.Size = UDim2.new(0, 16, 0, 16)
         ResizeGrip.AnchorPoint = Vector2.new(1, 1)
-        ResizeGrip.Position = UDim2.new(1, -6, 1, -6)
-        ResizeGrip.Rotation = 180          -- point the spline at the bottom-right
-        ResizeGrip.ZIndex = 12
+        ResizeGrip.Size = UDim2.new(0, GRIP, 0, GRIP)
+        ResizeGrip.Position = UDim2.new(1, -8, 1, -8)
+        ResizeGrip.Rotation = 180
+        ResizeGrip.ZIndex = 20
         ResizeGrip.AutoButtonColor = false
+        ResizeGrip.Active = true
         ResizeGrip.Parent = Main
 
         local ok, asset = pcall(getIcon, "spline")
@@ -2704,6 +2796,19 @@ local function SetupResizeGrip()
             ResizeGrip.ImageRectOffset = asset.imageRectOffset
             ResizeGrip.ImageRectSize = asset.imageRectSize
         end
+
+        -- Bigger invisible touch target so it is usable on phones
+        if UserInputService.TouchEnabled then
+            local pad = Instance.new("Frame")
+            pad.Name = "TouchPad"
+            pad.BackgroundTransparency = 1
+            pad.Size = UDim2.new(1, TOUCH_PAD * 2, 1, TOUCH_PAD * 2)
+            pad.Position = UDim2.new(0.5, 0, 0.5, 0)
+            pad.AnchorPoint = Vector2.new(0.5, 0.5)
+            pad.ZIndex = ResizeGrip.ZIndex - 1
+            pad.Active = true
+            pad.Parent = ResizeGrip
+        end
     end
 
     ResizeGrip.ImageColor3 = SelectedTheme and SelectedTheme.TopbarButtons or Color3.fromRGB(240, 240, 240)
@@ -2711,60 +2816,103 @@ local function SetupResizeGrip()
     ResizeGrip.Visible = Config.Get("ResizeEnabled")
 
     local resizing = false
+    local activeInput = nil          -- the exact finger / mouse button in use
     local startPos, startSize
+
+    local function idle()
+        if ResizeGrip.Visible then
+            Tween(ResizeGrip, 0.25, {ImageTransparency = 0.6, Rotation = 180})
+        end
+    end
 
     ResizeGrip.MouseEnter:Connect(function()
         if not resizing then
-            Tween(ResizeGrip, 0.2, {ImageTransparency = 0.1})
+            Tween(ResizeGrip, 0.2, {ImageTransparency = 0.05})
         end
     end)
 
     ResizeGrip.MouseLeave:Connect(function()
-        if not resizing then
-            Tween(ResizeGrip, 0.2, {ImageTransparency = 0.6})
-        end
+        if not resizing then idle() end
     end)
+
+    local function beginResize(input)
+        if not Config.Get("ResizeEnabled") then return end
+        if Hidden or Minimised then return end
+        resizing = true
+        activeInput = input
+        startPos = input.Position          -- works for both mouse and touch
+        startSize = Vector2.new(CurrentWidth, CurrentHeight)
+        Tween(ResizeGrip, 0.15, {ImageTransparency = 0})
+    end
+
+    local function endResize()
+        if not resizing then return end
+        resizing = false
+        activeInput = nil
+        idle()
+
+        -- Persist once on release rather than on every frame
+        if Config.Get("SaveWindowSize") then
+            Config.Set("SavedWidth", CurrentWidth, true)
+            Config.Set("SavedHeight", CurrentHeight, true)
+            SaveSettingsRef()
+        end
+    end
 
     ResizeGrip.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-            resizing = true
-            startPos = UserInputService:GetMouseLocation()
-            startSize = Vector2.new(CurrentWidth, CurrentHeight)
-            Tween(ResizeGrip, 0.2, {ImageTransparency = 0})
+            beginResize(input)
         end
     end)
+
+    -- Catch the press on the enlarged mobile pad too
+    local pad = ResizeGrip:FindFirstChild("TouchPad")
+    if pad then
+        pad.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                beginResize(input)
+            end
+        end)
+    end
 
     UserInputService.InputEnded:Connect(function(input)
         if not resizing then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            resizing = false
-            Tween(ResizeGrip, 0.2, {ImageTransparency = 0.6})
-
-            -- Persist the final size once, not on every frame
-            if Config.Get("SaveWindowSize") then
-                Config.Set("SavedWidth", CurrentWidth, true)
-                Config.Set("SavedHeight", CurrentHeight, true)
-                SaveSettingsRef()
-            end
+        -- Only the input that started the drag can end it
+        if activeInput and input == activeInput then
+            endResize()
+        elseif input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            endResize()
         end
     end)
 
-    RunService.RenderStepped:Connect(function()
-        if not resizing or Hidden or Minimised then return end
+    -- Driving the resize from InputChanged (not RenderStepped polling) is
+    -- what makes touch dragging work, since touches have no mouse location.
+    UserInputService.InputChanged:Connect(function(input)
+        if not resizing or not activeInput then return end
+        if Hidden or Minimised then return end
 
-        local delta = UserInputService:GetMouseLocation() - startPos
-        -- Anchor is centre, so the window grows twice as fast as the cursor
+        local isMove = input.UserInputType == Enum.UserInputType.MouseMovement
+                    or input.UserInputType == Enum.UserInputType.Touch
+        if not isMove then return end
+        -- for touch, only follow the finger that started the drag
+        if input.UserInputType == Enum.UserInputType.Touch and input ~= activeInput then
+            return
+        end
+
+        local delta = input.Position - startPos
+        -- Main is centre-anchored, so it grows at twice the cursor delta
         local newW = startSize.X + delta.X * 2
         local newH = startSize.Y + delta.Y * 2
 
         local wasSidebar = SidebarActive()
+        -- No tween while dragging: instant follow, no smearing
         ApplyWindowSize(newW, newH, false, true)
 
-        -- Crossing the threshold drops/restores the sidebar automatically
         if SidebarActive() ~= wasSidebar then
-            ApplyLayoutMode(true)
+            ApplyLayoutMode(false)
         end
     end)
 
