@@ -1254,6 +1254,10 @@ local Layout = {
     -- fixed pixel width, matching the stock look at the default size.
     SidebarWidth   = 174,
     SidebarGap     = 4,     -- space between sidebar and the element column
+    -- Gap below the sidebar. The asset's top gap is ~32px while this was
+    -- only 14, so the sidebar ran too close to the bottom and looked tall.
+    -- Raise this to make the sidebar shorter.
+    SidebarBottomGap = 38,
     OGScale        = 0.955, -- Elements width in OG mode (small side margins)
     SidebarHideAt  = 560,   -- auto-drop the sidebar below this width
 
@@ -2621,8 +2625,8 @@ local function ReflowSidebar(animated)
     end
 
     local topGap = SideTabList:GetAttribute("OrigYOffset") or 60
-    -- bottom margin mirrors the top gap so it looks balanced at any height
-    local bottomGap = 14
+    -- Balanced against the asset's top gap; tune via Layout.SidebarBottomGap
+    local bottomGap = Layout.SidebarBottomGap
     -- Fixed pixel width: as a percentage it grew with the window and looked
     -- oversized on wide layouts.
     local targetSize = UDim2.new(
