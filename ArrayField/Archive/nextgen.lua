@@ -1269,6 +1269,8 @@ local Layout = {
     -- (A right-only pad gave 11px left / 23px right, which is the uneven
     -- gap that looked bad. Padding is now applied to both sides.)
     ElementSidePad   = 5,    -- per side, so total inset is 2x this
+    ElementLeftPad   = 14,   -- text inset inside an element
+    ElementIconInset = 26,   -- extra inset when the element has an icon
     ElementMaxWidth  = 500,  -- natural stock width is 465; this is the ceiling
     ParagraphTextPad = 40,
 
@@ -2630,10 +2632,19 @@ local function ReflowSidebar(animated)
         -(topGap + bottomGap)
     )
 
-    if animated then
+    -- Apply directly when hidden: Tween() bails on objects that are not
+    -- currently visible/parented, which is why the sidebar appeared to
+    -- ignore resizing entirely.
+    if animated and SideTabList.Visible then
         Tween(SideTabList, 0.35, {Size = targetSize})
     else
         SideTabList.Size = targetSize
+    end
+
+    -- Keep the inner holder filling the sidebar, otherwise the tab list keeps
+    -- the asset's fixed height and the sidebar looks empty at the bottom.
+    if SideList and SideList:IsA("GuiObject") then
+        SideList.Size = UDim2.new(1, -12, 1, -(SideList.Position.Y.Offset + 10))
     end
 
     -- Let the tab list inside it scroll if there are more tabs than fit
@@ -2677,19 +2688,20 @@ local function ReflowElements(animated)
                 Elements:GetAttribute("OrigPosYOffset") or 60)
         end
     else
-        -- OG mode: full-width list sitting below the in-window tab strip.
+        -- OG mode: list sits below the in-window tab strip, horizontally
+        -- CENTRED. (Using anchorX * scale left-aligned the container and
+        -- dumped all the slack on the right - that was the stray gap.)
         local topOffset = Layout.OGElementsTop
         targetSize = UDim2.new(scale, 0, 1, -(topOffset + 12))
-        -- Centre horizontally within Main, honouring the anchor.
         targetPos = UDim2.new(
-            anchorX * scale,           -- anchor-corrected x
+            (1 - scale) / 2 + anchorX * scale,   -- centred, anchor-corrected
             0,
             0,
             topOffset + anchorY * (Main.AbsoluteSize.Y - topOffset - 12)
         )
         -- Vertical anchor is 0 in the stock asset; keep it simple and exact.
         if anchorY == 0 then
-            targetPos = UDim2.new(anchorX * scale, 0, 0, topOffset)
+            targetPos = UDim2.new((1 - scale) / 2 + anchorX * scale, 0, 0, topOffset)
         end
     end
 
@@ -2708,6 +2720,76 @@ end
      that is the "weird offset" / dead space on the right. Fixing the
      templates fixes every element type at once, including ones created
      later, without touching each Create* function. ]]
+--[[ Make the parts INSIDE an element responsive.
+
+     The asset positions these with fixed pixel offsets that assumed a 465px
+     element, which caused two bugs once elements could resize:
+
+       * "button" / "press" (ElementIndicator) sat at a fixed x offset, so on
+         a narrower element it was pushed outside the frame and clipped away.
+         It is now anchored to the element's RIGHT edge.
+
+       * Titles had a fixed width, so text drifted sideways (the toggle label
+         sliding inward). They are now left-anchored and fill the free space
+         minus whatever control sits on the right.
+
+     Safe to call on any element; each part is optional. ]]
+local function MakeElementInternalsResponsive(element)
+    if not element or element:GetAttribute("InternalsResponsive") then return end
+    element:SetAttribute("InternalsResponsive", true)
+
+    -- How much room the right-hand control needs (toggle switch, keybind box...)
+    local rightReserve = Layout.ElementLeftPad
+    for _, name in ipairs({ "Switch", "KeybindFrame", "InputFrame", "Main", "Display" }) do
+        local ctrl = element:FindFirstChild(name)
+        if ctrl and ctrl:IsA("GuiObject") then
+            local w = ctrl.Size.X.Offset
+            if w > 0 and w < 260 then
+                rightReserve = math.max(rightReserve, w + Layout.ElementLeftPad * 2)
+                -- pin the control to the right edge so it tracks resizing
+                ctrl.AnchorPoint = Vector2.new(1, ctrl.AnchorPoint.Y)
+                ctrl.Position = UDim2.new(1, -Layout.ElementLeftPad,
+                                          ctrl.Position.Y.Scale, ctrl.Position.Y.Offset)
+            end
+        end
+    end
+
+    -- "button" / "press" hint: stick to the right edge instead of a fixed x
+    local indicator = element:FindFirstChild("ElementIndicator")
+    if indicator and indicator:IsA("TextLabel") then
+        indicator.AnchorPoint = Vector2.new(1, 0.5)
+        indicator.Position = UDim2.new(1, -Layout.ElementLeftPad, 0.5, 0)
+        indicator.TextXAlignment = Enum.TextXAlignment.Right
+        if indicator.Size.X.Scale == 0 and indicator.Size.X.Offset > 0 then
+            indicator.Size = UDim2.new(0, math.max(indicator.Size.X.Offset, 60),
+                                       indicator.Size.Y.Scale, indicator.Size.Y.Offset)
+        end
+        rightReserve = rightReserve + indicator.Size.X.Offset + Layout.ElementLeftPad
+    end
+
+    -- Title: left-anchored, fills whatever is left
+    local title = element:FindFirstChild("Title")
+    if title and title:IsA("TextLabel") then
+        local hasIcon = element:FindFirstChild("Icon") or element:FindFirstChild("Image")
+        local leftPad = Layout.ElementLeftPad + (hasIcon and Layout.ElementIconInset or 0)
+        title.AnchorPoint = Vector2.new(0, title.AnchorPoint.Y)
+        title.Position = UDim2.new(0, leftPad, title.Position.Y.Scale, title.Position.Y.Offset)
+        title.Size = UDim2.new(1, -(leftPad + rightReserve), title.Size.Y.Scale, title.Size.Y.Offset)
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.TextTruncate = Enum.TextTruncate.AtEnd
+    end
+
+    -- Description sits under the title and follows the same left edge
+    local desc = element:FindFirstChild("Description") or element:FindFirstChild("Content")
+    if desc and desc:IsA("TextLabel") then
+        desc.AnchorPoint = Vector2.new(0, desc.AnchorPoint.Y)
+        desc.Position = UDim2.new(0, Layout.ElementLeftPad, desc.Position.Y.Scale, desc.Position.Y.Offset)
+        desc.Size = UDim2.new(1, -(Layout.ElementLeftPad + rightReserve),
+                              desc.Size.Y.Scale, desc.Size.Y.Offset)
+        desc.TextXAlignment = Enum.TextXAlignment.Left
+    end
+end
+
 local function MakeTemplatesResponsive()
     local T = Elements:FindFirstChild("Template")
     if not T or T:GetAttribute("Responsive") then return end
@@ -2730,6 +2812,8 @@ local function MakeTemplatesResponsive()
                 cap.Parent = child
             end
             cap.MaxSize = Vector2.new(Layout.ElementMaxWidth, math.huge)
+
+            MakeElementInternalsResponsive(child)
         end
     end
 end
