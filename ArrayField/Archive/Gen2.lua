@@ -49,6 +49,10 @@ local GuiService = game:GetService("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local ArrayFieldLibrary = {
+    -- Bump this whenever the file changes. Printing it on load is the
+    -- fastest way to tell whether the build you are running is the one you
+    -- think it is.
+    Build = "r8-2026-09-24",
     Flags = {},
     Theme = {
         Default = {
@@ -4691,7 +4695,11 @@ local function SetupSettingsScroller()
     pcall(function() Scroller.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable end)
     Scroller.Parent = SettingsFrame
 
-    -- Move the existing row container inside, flush to the top.
+    -- Move the existing row container inside, flush to the top. Its own
+    -- height must stop being fixed: the asset ships it at a set height, and
+    -- anything past that would be clipped once it lives in a scroller.
+    -- X sizing/position is preserved exactly so row widths do not shift.
+    Frame.ClipsDescendants = false
     Frame.Position = UDim2.new(Frame.Position.X.Scale, Frame.Position.X.Offset, 0, 0)
     Frame.Parent = Scroller
 
@@ -4755,6 +4763,13 @@ function RefreshSettingsSize(animated, extraProps)
     if SettingsScroller then
         SettingsScroller.Size = UDim2.new(1, 0, 1, -(header + Layout.SettingsPadBottom))
         SettingsScroller.CanvasSize = UDim2.new(0, 0, 0, rows)
+
+        -- Grow the row container to match its contents, or the rows past its
+        -- original fixed height are unreachable no matter how far you scroll.
+        local Frame = SettingsRowContainer()
+        if Frame then
+            Frame.Size = UDim2.new(Frame.Size.X.Scale, Frame.Size.X.Offset, 0, rows)
+        end
     end
 
     local props = {Size = UDim2.new(0, Layout.SettingsWidth, 0, h)}
@@ -5855,6 +5870,8 @@ function ArrayFieldLibrary:CreateWindow(Settings)
         CurrentWidth  = Config.Get("SavedWidth")
         CurrentHeight = Config.Get("SavedHeight")
     end
+
+    print("[ArrayField] build " .. tostring(ArrayFieldLibrary.Build))
 
     ArrayField.Enabled = true
 
